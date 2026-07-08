@@ -5,17 +5,17 @@ import math
 st.set_page_config(page_title="Tray Layout Optimizer", layout="wide")
 
 st.title("🛠️ NPI Tray Design Layout Optimizer (Professional Version)")
-st.write("ระบบจำลองการจัดวางถาด Tray - แสดงผลตามจำนวน Slot สูงสุดเพื่อการตัดสินใจเชิงวิศวกรรม")
+st.write("ระบบจำลองการจัดวางถาด Tray - คัดเลือกท่าที่ผลิตได้จริงและได้จำนวนช่องสูงสุด")
 
 # --- SIDEBAR: INPUT PARAMETERS ---
 st.sidebar.header("1. Product Dimensions (mm)")
-p_w = st.sidebar.number_input("Product Width (W)", value=70.0, step=1.0)
-p_l = st.sidebar.number_input("Product Length (L)", value=300.0, step=1.0)
+p_w = st.sidebar.number_input("Product Width (W)", value=314.0, step=1.0)
+p_l = st.sidebar.number_input("Product Length (L)", value=70.0, step=1.0)
 p_h = st.sidebar.number_input("Product Height (H)", value=15.0, step=1.0)
 
 st.sidebar.header("2. Tray Specification (mm)")
 overall_w = st.sidebar.number_input("Tray Overall Width", value=375.0)
-overall_l = st.sidebar.number_input("Tray Overall Length", value=280.0)
+overall_l = st.sidebar.number_input("Tray Overall Length", value=260.0)
 
 st.sidebar.header("3. Engineering Clearances")
 c_wide = st.sidebar.slider("Wide Plane Clearance (>=30mm)", 5.0, 20.0, 14.0)
@@ -36,22 +36,25 @@ def calculate_layout_params(pw_used, pl_used, ph_used, orientation_name):
     slot_l = pl_used + clearance_l
     slot_h = ph_used + c_h_depth
     
-    # DFM Check
     min_plane_dim = min(slot_w, slot_l)
     current_ratio = slot_h / min_plane_dim
     
     is_dfm_feasible = slot_h <= (min_plane_dim * max_depth_ratio)
     is_material_feasible = slot_h <= max_material_limit
     
-    status = "✅ PASS"
-    note = "Feasible"
-    
-    if not is_dfm_feasible:
-        status = "⚠️ DFM WARNING"
-        note = f"Ratio {current_ratio:.2f} > {max_depth_ratio} (Consider Rib Design)"
+    # กำหนดสถานะและลำดับความสำคัญ (Score)
     if not is_material_feasible:
         status = "❌ MATERIAL LIMIT"
+        priority_score = 1  # แย่ที่สุด
         note = f"Height {slot_h:.1f} > {max_material_limit}mm"
+    elif not is_dfm_feasible:
+        status = "⚠️ DFM WARNING"
+        priority_score = 2  # ยอมรับได้ (Rib Design)
+        note = f"Ratio {current_ratio:.2f} > {max_depth_ratio} (Consider Rib Design)"
+    else:
+        status = "✅ PASS"
+        priority_score = 2  # ดีมาก
+        note = "Feasible"
 
     # Layout Calculation
     slots_nw = math.floor((overall_w - temp_clearance) / (slot_w + temp_clearance))
@@ -66,7 +69,8 @@ def calculate_layout_params(pw_used, pl_used, ph_used, orientation_name):
         "SW": slot_w, "SL": slot_l, "SH": slot_h,
         "NW": slots_nw, "NL": slots_nl, "TOTAL": total_slots,
         "PITCH_W": pitch_w, "PITCH_L": pitch_l,
-        "STATUS": status, "NOTE": note, "RATIO": current_ratio
+        "STATUS": status, "NOTE": note, "RATIO": current_ratio,
+        "SCORE": priority_score # ใช้สำหรับเรียงลำดับ
     }
 
 # Run 6-Way Analysis
@@ -83,8 +87,9 @@ for i in range(3):
     results.append(calculate_layout_params(rem_dims[1], rem_dims[0], h_val, f"Case {case_idx}: {rem_nms[1]}x{rem_nms[0]}x{h_nm}"))
     case_idx += 1
 
-# --- 🔥 CRITICAL CHANGE: SORT BY TOTAL SLOTS FIRST ---
-results.sort(key=lambda x: x['TOTAL'], reverse=True)
+# --- 🚀 NEW SORTING LOGIC: PRIORITIZE FEASIBILITY FIRST, THEN TOTAL SLOTS ---
+# เรียงตาม SCORE (PASS/Warning มาก่อน) แล้วค่อยเรียงตามจำนวน TOTAL SLOTS
+results.sort(key=lambda x: (x['SCORE'], x['TOTAL']), reverse=True)
 
 # --- SVG PLOTTING ---
 def generate_svg_tray(res):
@@ -103,7 +108,7 @@ def generate_svg_tray(res):
 # --- DISPLAY ---
 col1, col2 = st.columns(2)
 with col1:
-    st.subheader("🥇 Best Capacity Option")
+    st.subheader("🥇 Best Feasible Option")
     best = results[0]
     st.markdown(f"### {best['STATUS']}")
     st.write(f"**{best['NAME']}**")
@@ -113,7 +118,7 @@ with col1:
     m3.metric("Depth Ratio", f"{best['RATIO']:.2f}")
     st.write(generate_svg_tray(best), unsafe_allow_html=True)
     if best["STATUS"] == "⚠️ DFM WARNING":
-        st.warning(f"💡 {best['NOTE']} - แนะนำให้ใช้การออกแบบรูปแบบ Rib Design ตามตัวอย่างในโรงงาน")
+        st.warning(f"💡 {best['NOTE']} - สามารถผลิตได้จริงโดยใช้การออกแบบ Rib Design")
 
 with col2:
     st.subheader("🥈 Alternative Option")
