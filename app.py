@@ -4,12 +4,12 @@ import math
 # ตั้งค่าหน้าเว็บ
 st.set_page_config(page_title="Tray Layout Optimizer", layout="wide")
 
-st.title("🛠️ NPI Tray Design Layout Optimizer (Grid Intelligence)")
-st.write("ระบบคัดเลือก Layout ที่เหมาะสมตามเงื่อนไขการผลิตจริง (Closed Pocket vs Rib Design)")
+st.title("🛠️ NPI Tray Design Layout Optimizer (Capacity First)")
+st.write("ระบบคัดเลือก Layout ที่เน้นจำนวน Slot สูงสุด ภายใต้เงื่อนไขที่ผลิตได้จริง")
 
 # --- SIDEBAR: INPUT PARAMETERS ---
 st.sidebar.header("1. Product Dimensions (mm)")
-p_w = st.sidebar.number_input("Product Width (W)", value=50.0, step=1.0)
+p_w = st.sidebar.number_input("Product Width (W)", value=314.0, step=1.0)
 p_l = st.sidebar.number_input("Product Length (L)", value=60.0, step=1.0)
 p_h = st.sidebar.number_input("Product Height (H)", value=15.0, step=1.0)
 
@@ -39,32 +39,36 @@ def calculate_layout_params(pw_used, pl_used, ph_used, orientation_name):
     min_plane_dim = min(slot_w, slot_l)
     current_ratio = slot_h / min_plane_dim
     
-    # Layout Calculation (คำนวณจำนวนแถวก่อนเพื่อใช้เช็ค DFM)
+    # Layout Calculation
     slots_nw = math.floor((overall_w - temp_clearance) / (slot_w + temp_clearance))
     slots_nl = math.floor((overall_l - temp_clearance) / (slot_l + temp_clearance))
     total_slots = max(0, slots_nw * slots_nl)
     
-    # --- 🔥 NEW INTELLIGENT DFM LOGIC ---
+    # --- INTELLIGENT DFM & SCORING ---
     is_material_feasible = slot_h <= max_material_limit
     is_ratio_pass = current_ratio <= max_depth_ratio
-    is_single_row = (slots_nw == 1 or slots_nl == 1) # เช็คว่าเป็นแถวเดียวหรือไม่
+    is_single_row = (slots_nw == 1 or slots_nl == 1)
     
-    if not is_material_feasible:
+    if total_slots == 0:
+        status = "❌ DOES NOT FIT"
+        score = 0
+        note = "Layout exceeds tray dimensions"
+    elif not is_material_feasible:
         status = "❌ MATERIAL LIMIT"
         score = 0
         note = f"Height {slot_h:.1f} > {max_material_limit}mm"
     elif is_ratio_pass:
         status = "✅ PASS"
-        score = 3 # ดีที่สุด
+        score = 3  # ผลิตได้ชัวร์ (Grid)
         note = "Feasible (Closed Pocket)"
     elif is_single_row:
         status = "⚠️ DFM WARNING"
-        score = 2 # ยอมรับได้เฉพาะ Rib Design
+        score = 2  # ผลิตได้ (Rib Design)
         note = f"Ratio {current_ratio:.2f} > {max_depth_ratio} (Rib Design Possible)"
     else:
         status = "❌ DFM ERROR"
-        score = 1 # ผลิตไม่ได้จริงเพราะเป็น Grid แต่หลุมลึกเกิน
-        note = f"Ratio {current_ratio:.2f} > {max_depth_ratio} (Too deep for Grid Layout)"
+        score = 1  # ผลิตไม่ได้จริง (Too deep Grid)
+        note = f"Ratio {current_ratio:.2f} > {max_depth_ratio}"
 
     pitch_w = (overall_w - (slots_nw * slot_w)) / (slots_nw + 1) if slots_nw > 0 else 0
     pitch_l = (overall_l - (slots_nl * slot_l)) / (slots_nl + 1) if slots_nl > 0 else 0
@@ -92,7 +96,13 @@ for i in range(3):
     results.append(calculate_layout_params(rem_dims[1], rem_dims[0], h_val, f"Case {case_idx}: {rem_nms[1]}x{rem_nms[0]}x{h_nm}"))
     case_idx += 1
 
-# Sorting: PASS (3) > WARNING (2) > ERROR (1) > LIMIT (0)
+# --- 🔥 CRITICAL CHANGE: SORTING LOGIC ---
+# 1. คัดเฉพาะท่าที่ "พอวางได้จริง" (Score >= 2)
+# 2. เรียงตามจำนวน TOTAL SLOTS เยอะที่สุดขึ้นก่อน
+practical_results = [r for r in results if r['SCORE'] >= 2]
+practical_results.sort(key=lambda x: x['TOTAL'], reverse=True)
+
+# ส่วนตารางข้างล่างให้เรียงตามสถานะเดิมเพื่อให้เห็นภาพรวม
 results.sort(key=lambda x: (x['SCORE'], x['TOTAL']), reverse=True)
 
 # --- SVG PLOTTING ---
@@ -112,27 +122,32 @@ def generate_svg_tray(res):
 # --- DISPLAY ---
 col1, col2 = st.columns(2)
 with col1:
-    st.subheader("🥇 Best Feasible Option")
-    best = results[0]
-    st.markdown(f"### {best['STATUS']}")
-    st.write(f"**{best['NAME']}**")
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Total Slots", f"{best['TOTAL']} Pcs")
-    m2.metric("Tray Thick", f"{best['SH']:.1f} mm")
-    m3.metric("Depth Ratio", f"{best['RATIO']:.2f}")
-    st.write(generate_svg_tray(best), unsafe_allow_html=True)
-    if best["SCORE"] == 1:
-        st.error("⚠️ คำเตือน: ท่านี้ได้จำนวนเยอะจริง แต่หลุมลึกเกินกว่าจะผลิตเป็นแบบตาราง (Grid) ได้")
+    st.subheader("🥇 Best Capacity Option (Practical)")
+    if practical_results:
+        best = practical_results[0]
+        st.markdown(f"### {best['STATUS']}")
+        st.write(f"**{best['NAME']}**")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Total Slots", f"{best['TOTAL']} Pcs")
+        m2.metric("Tray Thick", f"{best['SH']:.1f} mm")
+        m3.metric("Depth Ratio", f"{best['RATIO']:.2f}")
+        st.write(generate_svg_tray(best), unsafe_allow_html=True)
+    else:
+        st.error("ไม่มีรูปแบบการวางที่ผลิตได้จริง")
 
 with col2:
-    st.subheader("🥈 Alternative Option")
-    runner_up = results[1]
-    st.write(f"**{runner_up['NAME']}** ({runner_up['STATUS']})")
-    st.write(f"Total Slots: {runner_up['TOTAL']} | Tray Thick: {runner_up['SH']:.1f} mm")
-    st.write(generate_svg_tray(runner_up), unsafe_allow_html=True)
+    st.subheader("🥈 Alternative Practical Option")
+    if len(practical_results) > 1:
+        runner_up = practical_results[1]
+        st.markdown(f"### {runner_up['STATUS']}")
+        st.write(f"**{runner_up['NAME']}**")
+        st.write(f"Total Slots: {runner_up['TOTAL']} | Tray Thick: {runner_up['SH']:.1f} mm")
+        st.write(generate_svg_tray(runner_up), unsafe_allow_html=True)
+    else:
+        st.write("ไม่มีทางเลือกสำรองที่เหมาะสม")
 
 st.write("---")
-st.subheader("📊 6-Way Advanced DFM Analysis")
+st.subheader("📊 6-Way Full Analysis Table")
 table_data = []
 for r in results:
     table_data.append({
