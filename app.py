@@ -29,7 +29,6 @@ max_material_limit = st.sidebar.number_input("Max Material Deformation (mm)", va
 
 # --- CALCULATION ENGINE ---
 def calculate_layout_params(pw_used, pl_used, ph_used, orientation_name):
-    # 1. Slot Dimension Calculation
     clearance_w = c_wide if pw_used >= 30 else c_narrow
     clearance_l = c_wide if pl_used >= 30 else c_narrow
     
@@ -37,7 +36,6 @@ def calculate_layout_params(pw_used, pl_used, ph_used, orientation_name):
     slot_l = pl_used + clearance_l
     slot_h = ph_used + c_h_depth
     
-    # 2. Feasibility Check
     min_plane_dim = min(slot_w, slot_l)
     max_allowable_depth = min_plane_dim * max_depth_ratio
     
@@ -48,36 +46,30 @@ def calculate_layout_params(pw_used, pl_used, ph_used, orientation_name):
     feasibility_note = ""
     
     if not is_dfm_feasible:
-        feasibility_note = f"DFM Error: Depth {slot_h:.1f} > Max {max_allowable_depth:.1f} (Ratio {max_depth_ratio}:1)"
+        feasibility_note = f"DFM Error: Depth {slot_h:.1f} > Max {max_allowable_depth:.1f}"
     elif not is_material_feasible:
         feasibility_note = f"Material Error: Slot H {slot_h:.1f} > Limit {max_material_limit}mm"
     else:
         is_feasible = True
 
-    # 3. Layout Calculation
     slots_nw, slots_nl, total_slots = 0, 0, 0
     pitch_w, pitch_l = 0.0, 0.0
-    offset_w, offset_l = 0.0, 0.0
-
     if is_feasible:
         slots_nw = math.floor((overall_w - temp_clearance) / (slot_w + temp_clearance))
         slots_nl = math.floor((overall_l - temp_clearance) / (slot_l + temp_clearance))
         total_slots = slots_nw * slots_nl
-
         if total_slots > 0:
             pitch_w = (overall_w - (slots_nw * slot_w)) / (slots_nw + 1)
             pitch_l = (overall_l - (slots_nl * slot_l)) / (slots_nl + 1)
-            offset_w, offset_l = pitch_w, pitch_l
         else:
             is_feasible = False
-            feasibility_note = "Layout impossible (Slots = 0)"
+            feasibility_note = "Slots = 0"
 
     return {
         "NAME": orientation_name, "PW": pw_used, "PL": pl_used, "PH": ph_used,
         "SW": slot_w, "SL": slot_l, "SH": slot_h,
         "NW": slots_nw, "NL": slots_nl, "TOTAL": total_slots,
         "PITCH_W": pitch_w, "PITCH_L": pitch_l,
-        "OFF_W": offset_w, "OFF_L": offset_l,
         "FEASIBLE": is_feasible, "NOTE": feasibility_note
     }
 
@@ -86,46 +78,33 @@ dims = [p_w, p_l, p_h]
 dim_names = ['W', 'L', 'H']
 results = []
 case_idx = 1
-
 for i in range(3):
     h_val, h_nm = dims[i], dim_names[i]
     rem_dims = [dims[j] for j in range(3) if j != i]
     rem_nms = [dim_names[j] for j in range(3) if j != i]
-    
     results.append(calculate_layout_params(rem_dims[0], rem_dims[1], h_val, f"Case {case_idx}: {rem_nms[0]}x{rem_nms[1]}x{h_nm}"))
     case_idx += 1
     results.append(calculate_layout_params(rem_dims[1], rem_dims[0], h_val, f"Case {case_idx}: {rem_nms[1]}x{rem_nms[0]}x{h_nm}"))
     case_idx += 1
 
-# Sort: Feasible first, then by total slots
 results.sort(key=lambda x: (x['FEASIBLE'], x['TOTAL']), reverse=True)
 
-# --- SVG PLOTTING ENGINE ---
+# --- SVG PLOTTING ---
 def generate_svg_tray(res, color_theme):
     if not res["FEASIBLE"]:
-        return f'<svg width="100%" height="200"><rect width="100%" height="100%" fill="#fee2e2" rx="10"/><text x="50%" y="50%" font-weight="bold" fill="#ef4444" text-anchor="middle">{res["NOTE"]}</text></svg>'
-    
-    view_w, view_h = overall_w, overall_l
-    svg = f'<svg width="100%" height="auto" viewBox="0 0 {view_w} {view_h}" xmlns="http://www.w3.org/2000/svg" style="background-color: white; border: 2px solid {color_theme}; border-radius: 8px;">'
-    
-    # วาดขอบ Tray
+        return f'<svg width="100%" height="200"><rect width="100%" height="100%" fill="#fee2e2" rx="10"/><text x="50%" y="50%" fill="#ef4444" text-anchor="middle">{res["NOTE"]}</text></svg>'
+    svg = f'<svg width="100%" height="auto" viewBox="0 0 {overall_w} {overall_l}" xmlns="http://www.w3.org/2000/svg" style="background-color: white; border: 2px solid {color_theme}; border-radius: 8px;">'
     svg += f'<rect x="0" y="0" width="{overall_w}" height="{overall_l}" fill="none" stroke="{color_theme}" stroke-width="4" />'
-    
-    # วาด Slot
     for i in range(res["NW"]):
         for j in range(res["NL"]):
-            x = res["OFF_W"] + i * (res["SW"] + res["PITCH_W"])
-            y = res["OFF_L"] + j * (res["SL"] + res["PITCH_L"])
+            x = res["PITCH_W"] + i * (res["SW"] + res["PITCH_W"])
+            y = res["PITCH_L"] + j * (res["SL"] + res["PITCH_L"])
             svg += f'<rect x="{x}" y="{y}" width="{res["SW"]}" height="{res["SL"]}" fill="#f3f4f6" stroke="#9ca3af" stroke-width="1" />'
-            if i == 0 and j == 0: # ใส่ Label ขนาดที่ช่องแรก
-                svg += f'<text x="{x + res["SW"]/2}" y="{y + res["SL"]/2}" font-size="12" fill="#4b5563" text-anchor="middle" font-weight="bold">{int(res["SW"])}x{int(res["SL"])}</text>'
-    
     svg += '</svg>'
     return svg
 
 # --- DISPLAY ---
 col1, col2 = st.columns(2)
-
 with col1:
     st.subheader("🥇 Optimal Feasible Case")
     best = results[0]
@@ -133,34 +112,30 @@ with col1:
         st.success(f"**{best['NAME']}**")
         c_m1, c_m2, c_m3 = st.columns(3)
         c_m1.metric("Total Slots", f"{best['TOTAL']} Pcs")
-        c_m2.metric("Tray Thickness", f"{best['SH']:.1f} mm")
+        c_m2.metric("Tray Thick", f"{best['SH']:.1f} mm")
         c_m3.metric("Layout", f"{best['NW']}x{best['NL']}")
         st.write(generate_svg_tray(best, "#16a34a"), unsafe_allow_html=True)
-    else:
-        st.error("ไม่พบรูปแบบที่สามารถผลิตได้ตามเงื่อนไข DFM")
 
 with col2:
     st.subheader("🥈 Runner-up Case")
-    # หาเคสที่ 2 ที่เป็น Feasible (ถ้ามี)
     runner_up = results[1]
     if runner_up["FEASIBLE"]:
         st.info(f"**{runner_up['NAME']}**")
-        st.write(f"Total Slots: {runner_up['TOTAL']} | Thickness: {runner_up['SH']:.1f} mm")
+        st.write(f"Total Slots: {runner_up['TOTAL']} | Thick: {runner_up['SH']:.1f} mm")
         st.write(generate_svg_tray(runner_up, "#2563eb"), unsafe_allow_html=True)
-    else:
-        st.write("ไม่มีทางเลือกสำรองที่ผ่านเงื่อนไข DFM")
 
 st.write("---")
 st.subheader("📊 6-Way Feasibility Summary Table")
-# เตรียมข้อมูลตาราง
 table_data = []
 for r in results:
     table_data.append({
         "Status": "✅ Pass" if r["FEASIBLE"] else "❌ Fail",
         "Case": r["NAME"],
+        "Orientation (WxL)": f"{r['PW']:.1f} x {r['PL']:.1f}",
         "Slot Dim (WxLxH)": f"{r['SW']:.1f}x{r['SL']:.1f}x{r['SH']:.1f}",
+        "Tray Thick (mm)": f"{r['SH']:.1f}", # ดึงค่าความหนากลับมาแล้วครับ
         "Total Slots": r["TOTAL"],
         "Pitch (W/L)": f"{r['PITCH_W']:.1f} / {r['PITCH_L']:.1f}",
         "Feasibility Note": r["NOTE"] if not r["FEASIBLE"] else "Optimal" if r == results[0] else "-"
     })
-st.table(table_data)
+st.dataframe(table_data, use_container_width=True)
