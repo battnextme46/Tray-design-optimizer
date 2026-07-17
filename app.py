@@ -18,7 +18,7 @@ force_horizontal = st.sidebar.checkbox("⚠️ Force Horizontal (H-up) for Heavy
 st.sidebar.header("2. Tray Specification (mm)")
 overall_w = st.sidebar.number_input("Tray Overall Width", value=375.0)
 overall_l = st.sidebar.number_input("Tray Overall Length", value=260.0)
-tray_margin = st.sidebar.number_input("Tray Edge Margin (Stacking Shoulder)", value=15.0)
+tray_margin = st.sidebar.number_input("Tray Edge Margin (Stacking Shoulder)", value=10.0)
 
 st.sidebar.header("3. Engineering Clearances")
 c_wide = st.sidebar.slider("Wide Plane Clearance (>=30mm)", 5.0, 20.0, 14.0)
