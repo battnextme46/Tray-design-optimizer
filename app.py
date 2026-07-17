@@ -60,8 +60,8 @@ def calculate_layout_params(pw_used, pl_used, ph_used, orientation_name):
     
     if "Manual" in handling:
         # บังคับระยะขั้นต่ำ 18mm เพื่อการกัดรอยเว้านิ้วจับ
-        if req_pitch < 18.0:
-            req_pitch = 18.0
+        if req_pitch < 5.0:
+            req_pitch = 5.0
             
     # 6. คำนวณ Layout ในพื้นที่ใช้งานจริง
     usable_w = overall_w - (2 * tray_margin)
