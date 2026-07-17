@@ -59,7 +59,7 @@ def calculate_layout_params(pw_used, pl_used, ph_used, orientation_name):
     req_pitch = base_web_clearance + (current_ratio * dynamic_web_factor)
     
     if "Manual" in handling:
-        # บังคับระยะขั้นต่ำ 18mm เพื่อการกัดรอยเว้านิ้วจับ
+        # บังคับระยะขั้นต่ำ 5mm เพื่อการกัดรอยเว้านิ้วจับ
         if req_pitch < 5.0:
             req_pitch = 5.0
             
