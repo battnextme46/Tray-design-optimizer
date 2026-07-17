@@ -45,12 +45,14 @@ def calculate_layout_params(pw_used, pl_used, ph_used, orientation_name):
     clearance_w = c_wide if pw_used >= 30 else c_narrow
     clearance_l = c_wide if pl_used >= 30 else c_narrow
     
-    # เผื่อช่องล้วงนิ้ว (Finger Slot) เข้าไปในด้านที่ยาวกว่า หากเป็น Manual
+# คำนวณระยะเว้นช่องไฟแบบ Dynamic ตามความลึก
+    req_pitch = base_web_clearance + (current_ratio * dynamic_web_factor)
+    
+    # [NEW LOGIC] ถ้าต้องใช้มือคนหยิบ ให้บังคับระยะ Web Pitch ขั้นต่ำให้กว้างพอทำรอยเว้า Finger Scallop
+    # ระยะนิ้วคนมาตรฐานมักจะต้องการความกว้างของผนังอย่างน้อย 15-18 mm เพื่อกัดรอยเว้าลงไป
     if "Manual" in handling:
-        if pw_used >= pl_used:
-            clearance_w += 20.0
-        else:
-            clearance_l += 20.0
+        if req_pitch < 18.0:
+            req_pitch = 18.0
             
     slot_h = ph_used + c_h_depth
     
