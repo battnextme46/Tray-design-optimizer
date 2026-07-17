@@ -13,7 +13,7 @@ p_w = st.sidebar.number_input("Product Width (W)", value=314.0, step=1.0)
 p_l = st.sidebar.number_input("Product Length (L)", value=60.0, step=1.0)
 p_h = st.sidebar.number_input("Product Height (H)", value=15.0, step=1.0)
 
-# [NEW] Checkbox สำหรับล็อคท่าแนวนอน (H-Up) เท่านั้น
+# Checkbox สำหรับล็อคท่าแนวนอน (H-Up) เท่านั้น
 force_horizontal = st.sidebar.checkbox("⚠️ Force Horizontal (H-up) for Heavy/Large Components", value=False, help="บังคับวางบอร์ดแนวนอนเท่านั้น สำหรับ PCBA ที่มีชิ้นส่วนหนักหรือสูง เพื่อป้องกันบอร์ดโก่งตัว")
 
 st.sidebar.header("2. Tray Specification (mm)")
@@ -26,14 +26,16 @@ c_wide = st.sidebar.slider("Wide Plane Clearance (>=30mm)", 5.0, 20.0, 14.0)
 c_narrow = st.sidebar.slider("Narrow Plane Clearance (<30mm)", 5.0, 20.0, 11.0)
 c_h_depth = st.sidebar.number_input("Vertical Clearance (Safety Margin)", value=12.0)
 
-# [MODIFIED] ตั้งค่า Default เป็น Manual เพื่อกลยุทธ์การ Quote ราคาที่ปลอดภัย
+# ตั้งค่า Default เป็น Manual เพื่อกลยุทธ์การ Quote ราคาที่ปลอดภัย
 handling = st.sidebar.radio("Assembly Handling Method", [
     "Manual (Need Finger Slots) - Default for Safe RFQ", 
     "Automation (Robotic/Vacuum)"
 ])
 
 st.sidebar.header("4. DFM & Material Limits")
-temp_clearance = st.sidebar.number_input("DFM Pitch (Wall Between Slots)", value=8.0)
+# [MODIFIED] เปลี่ยนตัวแปรให้สอดคล้องกับ Dynamic Web Pitch Logic
+base_web_clearance = st.sidebar.number_input("Base Web Clearance (Minimum)", value=8.0, help="ระยะห่างช่องพื้นฐานก่อนชดเชยความลึก")
+dynamic_web_factor = st.sidebar.slider("Dynamic Web Factor", 0.0, 3.0, 1.5, help="ตัวคูณชดเชยระยะห่างช่องตาม Draw Ratio (ป้องกันพลาสติกบาง)")
 max_depth_ratio = st.sidebar.slider("Max Depth Ratio (Draw Ratio)", 1.0, 5.0, 2.5)
 max_material_limit = st.sidebar.number_input("Max Material Limit (Total Height)", value=85.0)
 draft_angle = st.sidebar.number_input("Draft Angle (Degrees)", value=3.0)
@@ -59,16 +61,23 @@ def calculate_layout_params(pw_used, pl_used, ph_used, orientation_name):
     slot_l = pl_used + clearance_l + draft_expansion
     
     min_plane_dim = min(slot_w, slot_l)
-    current_ratio = slot_h / min_plane_dim
+    current_ratio = slot_h / min_plane_dim if min_plane_dim > 0 else 0
     
-    # คำนวณพื้นที่ใช้งานจริง หักขอบ Stacking ออกแล้ว
+    # [NEW] หักพื้นที่ขอบออก (Stacking Shoulder) เพื่อหา Usable Area ที่แท้จริง
     usable_w = overall_w - (2 * tray_margin)
     usable_l = overall_l - (2 * tray_margin)
     
-    # Layout Calculation
-    slots_nw = math.floor((usable_w - temp_clearance) / (slot_w + temp_clearance))
-    slots_nl = math.floor((usable_l - temp_clearance) / (slot_l + temp_clearance))
-    total_slots = max(0, slots_nw * slots_nl)
+    # [NEW] คำนวณระยะเว้นช่องไฟแบบ Dynamic ตามความลึก (ป้องกันอาการ Webbing)
+    req_pitch = base_web_clearance + (current_ratio * dynamic_web_factor)
+    
+    # Layout Calculation อ้างอิงจาก Pitch ที่ถูกชดเชยแล้ว
+    slots_nw = math.floor((usable_w - req_pitch) / (slot_w + req_pitch))
+    slots_nl = math.floor((usable_l - req_pitch) / (slot_l + req_pitch))
+    
+    # ป้องกันกรณีพื้นที่ใช้งานเล็กกว่าชิ้นงานจนค่าติดลบ
+    slots_nw = max(0, slots_nw)
+    slots_nl = max(0, slots_nl)
+    total_slots = slots_nw * slots_nl
     
     # --- INTELLIGENT DFM & SCORING ---
     is_material_feasible = slot_h <= max_material_limit
@@ -89,21 +98,27 @@ def calculate_layout_params(pw_used, pl_used, ph_used, orientation_name):
         note = "Feasible (Closed Pocket)"
     elif is_single_row:
         status = "⚠️ WARNING (Rib Req.)"
-        score = 2  # ผลิตได้ แต่ต้องทำ Ribs
+        score = 2  # ผลิตได้ แต่ต้องทำ Ribs ช่วยค้ำ
         note = f"Ratio {current_ratio:.2f} > {max_depth_ratio} (Needs Rib Design)"
     else:
         status = "❌ DFM ERROR"
-        score = 1  # ลึกเกินไป ขึ้นรูปยากมาก
+        score = 1  # ลึกเกินไป ขึ้นรูปยากมาก พลาสติกฉีกขาด
         note = f"Ratio {current_ratio:.2f} > {max_depth_ratio} (Too Deep)"
 
-    pitch_w = (usable_w - (slots_nw * slot_w)) / (slots_nw + 1) if slots_nw > 0 else 0
-    pitch_l = (usable_l - (slots_nl * slot_l)) / (slots_nl + 1) if slots_nl > 0 else 0
+    # กระจาย Pitch ให้สมดุลซ้าย-ขวา บน-ล่าง สำหรับการวาด SVG ให้สวยงาม
+    if total_slots > 0:
+        used_w = slots_nw * slot_w
+        used_l = slots_nl * slot_l
+        pitch_w = (usable_w - used_w) / (slots_nw + 1)
+        pitch_l = (usable_l - used_l) / (slots_nl + 1)
+    else:
+        pitch_w, pitch_l = 0, 0
 
     return {
         "NAME": orientation_name, "PW": pw_used, "PL": pl_used, "PH": ph_used,
         "SW": slot_w, "SL": slot_l, "SH": slot_h,
         "NW": slots_nw, "NL": slots_nl, "TOTAL": total_slots,
-        "PITCH_W": pitch_w, "PITCH_L": pitch_l,
+        "PITCH_W": pitch_w, "PITCH_L": pitch_l, "REQ_PITCH": req_pitch,
         "STATUS": status, "NOTE": note, "RATIO": current_ratio,
         "SCORE": score
     }
@@ -116,7 +131,7 @@ case_idx = 1
 for i in range(3):
     h_val, h_nm = dims[i], dim_names[i]
     
-    # [NEW] ข้าม Loop ท่าที่แนวตั้ง (ตั้งด้วย W หรือ L) ถ้าถูกบังคับให้วางแนวนอน
+    # ข้าม Loop ท่าที่แนวตั้ง (ตั้งด้วย W หรือ L) ถ้าถูกบังคับให้วางแนวนอน
     if force_horizontal and h_nm != 'H':
         continue
         
@@ -139,6 +154,7 @@ def generate_svg_tray(res):
     
     # วาด Overall Box
     svg += f'<rect width="100%" height="100%" fill="none" stroke="{color}" stroke-width="4" />'
+    
     # วาด Usable Area Box
     svg += f'<rect x="{tray_margin}" y="{tray_margin}" width="{overall_w - 2*tray_margin}" height="{overall_l - 2*tray_margin}" fill="none" stroke="#6b7280" stroke-width="2" stroke-dasharray="5,5" />'
     
@@ -189,6 +205,7 @@ for r in results:
         "Tray Thick (mm)": f"{r['SH']:.1f}",
         "Total Slots": r["TOTAL"],
         "Draw Ratio": f"{r['RATIO']:.2f}",
+        "Min Pitch Req (mm)": f"{r['REQ_PITCH']:.1f}",
         "Note": r["NOTE"]
     })
 st.dataframe(table_data, use_container_width=True)
