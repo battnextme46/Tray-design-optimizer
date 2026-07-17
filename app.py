@@ -13,24 +13,29 @@ p_w = st.sidebar.number_input("Product Width (W)", value=314.0, step=1.0)
 p_l = st.sidebar.number_input("Product Length (L)", value=60.0, step=1.0)
 p_h = st.sidebar.number_input("Product Height (H)", value=15.0, step=1.0)
 
+# [NEW] Checkbox สำหรับล็อคท่าแนวนอน (H-Up) เท่านั้น
+force_horizontal = st.sidebar.checkbox("⚠️ Force Horizontal (H-up) for Heavy/Large Components", value=False, help="บังคับวางบอร์ดแนวนอนเท่านั้น สำหรับ PCBA ที่มีชิ้นส่วนหนักหรือสูง เพื่อป้องกันบอร์ดโก่งตัว")
+
 st.sidebar.header("2. Tray Specification (mm)")
 overall_w = st.sidebar.number_input("Tray Overall Width", value=375.0)
 overall_l = st.sidebar.number_input("Tray Overall Length", value=260.0)
-# [NEW] หักระยะขอบบ่าถาดสำหรับการซ้อน Stacking
 tray_margin = st.sidebar.number_input("Tray Edge Margin (Stacking Shoulder)", value=15.0, help="ระยะขอบรอบนอกสำหรับรับน้ำหนักถาดใบบน")
 
 st.sidebar.header("3. Engineering Clearances")
 c_wide = st.sidebar.slider("Wide Plane Clearance (>=30mm)", 5.0, 20.0, 14.0)
 c_narrow = st.sidebar.slider("Narrow Plane Clearance (<30mm)", 5.0, 20.0, 11.0)
 c_h_depth = st.sidebar.number_input("Vertical Clearance (Safety Margin)", value=12.0)
-# [NEW] การหยิบจับ เพื่อเพิ่ม Finger Slot
-handling = st.sidebar.radio("Assembly Handling Method", ["Automation (Robotic/Vacuum)", "Manual (Need Finger Slots)"])
+
+# [MODIFIED] ตั้งค่า Default เป็น Manual เพื่อกลยุทธ์การ Quote ราคาที่ปลอดภัย
+handling = st.sidebar.radio("Assembly Handling Method", [
+    "Manual (Need Finger Slots) - Default for Safe RFQ", 
+    "Automation (Robotic/Vacuum)"
+])
 
 st.sidebar.header("4. DFM & Material Limits")
 temp_clearance = st.sidebar.number_input("DFM Pitch (Wall Between Slots)", value=8.0)
 max_depth_ratio = st.sidebar.slider("Max Depth Ratio (Draw Ratio)", 1.0, 5.0, 2.5)
 max_material_limit = st.sidebar.number_input("Max Material Limit (Total Height)", value=85.0)
-# [NEW] Draft Angle เผื่อความบานของปากช่องตามความลึก
 draft_angle = st.sidebar.number_input("Draft Angle (Degrees)", value=3.0)
 
 # --- CALCULATION ENGINE ---
@@ -38,8 +43,8 @@ def calculate_layout_params(pw_used, pl_used, ph_used, orientation_name):
     clearance_w = c_wide if pw_used >= 30 else c_narrow
     clearance_l = c_wide if pl_used >= 30 else c_narrow
     
-    # [NEW] เผื่อช่องล้วงนิ้ว (Finger Slot) เข้าไปในด้านที่ยาวกว่า หากเป็น Manual
-    if handling == "Manual (Need Finger Slots)":
+    # เผื่อช่องล้วงนิ้ว (Finger Slot) เข้าไปในด้านที่ยาวกว่า หากเป็น Manual
+    if "Manual" in handling:
         if pw_used >= pl_used:
             clearance_w += 20.0
         else:
@@ -47,7 +52,7 @@ def calculate_layout_params(pw_used, pl_used, ph_used, orientation_name):
             
     slot_h = ph_used + c_h_depth
     
-    # [NEW] คำนวณ Draft Angle Effect (ยิ่งลึก ปากยิ่งกว้าง)
+    # คำนวณ Draft Angle Effect (ยิ่งลึก ปากยิ่งกว้าง)
     draft_expansion = 2 * (slot_h * math.tan(math.radians(draft_angle)))
     
     slot_w = pw_used + clearance_w + draft_expansion
@@ -56,7 +61,7 @@ def calculate_layout_params(pw_used, pl_used, ph_used, orientation_name):
     min_plane_dim = min(slot_w, slot_l)
     current_ratio = slot_h / min_plane_dim
     
-    # [NEW] คำนวณพื้นที่ใช้งานจริง หักขอบ Stacking ออกแล้ว
+    # คำนวณพื้นที่ใช้งานจริง หักขอบ Stacking ออกแล้ว
     usable_w = overall_w - (2 * tray_margin)
     usable_l = overall_l - (2 * tray_margin)
     
@@ -110,6 +115,11 @@ results = []
 case_idx = 1
 for i in range(3):
     h_val, h_nm = dims[i], dim_names[i]
+    
+    # [NEW] ข้าม Loop ท่าที่แนวตั้ง (ตั้งด้วย W หรือ L) ถ้าถูกบังคับให้วางแนวนอน
+    if force_horizontal and h_nm != 'H':
+        continue
+        
     rem_dims = [dims[j] for j in range(3) if j != i]
     rem_nms = [dim_names[j] for j in range(3) if j != i]
     results.append(calculate_layout_params(rem_dims[0], rem_dims[1], h_val, f"Case {case_idx}: {rem_nms[0]}x{rem_nms[1]}x{h_nm} (Z)"))
@@ -119,7 +129,7 @@ for i in range(3):
 
 # SORTING LOGIC
 practical_results = [r for r in results if r['SCORE'] >= 2]
-practical_results.sort(key=lambda x: (x['TOTAL'], -x['RATIO']), reverse=True) # เอาจำนวนมากสุด ถ้าระยะเท่ากันเอาลึกน้อยสุด
+practical_results.sort(key=lambda x: (x['TOTAL'], -x['RATIO']), reverse=True) 
 results.sort(key=lambda x: (x['SCORE'], x['TOTAL']), reverse=True)
 
 # --- SVG PLOTTING ---
@@ -127,16 +137,14 @@ def generate_svg_tray(res):
     color = "#16a34a" if res["SCORE"] == 3 else "#ca8a04" if res["SCORE"] == 2 else "#ef4444"
     svg = f'<svg width="100%" height="auto" viewBox="0 0 {overall_w} {overall_l}" xmlns="http://www.w3.org/2000/svg" style="background-color: white; border: 3px solid {color}; border-radius: 8px;">'
     
-    # วาด Overall Box (ขอบนอก)
+    # วาด Overall Box
     svg += f'<rect width="100%" height="100%" fill="none" stroke="{color}" stroke-width="4" />'
-    
-    # วาด Usable Area Box (เส้นประแสดงขอบบ่ารับน้ำหนัก)
+    # วาด Usable Area Box
     svg += f'<rect x="{tray_margin}" y="{tray_margin}" width="{overall_w - 2*tray_margin}" height="{overall_l - 2*tray_margin}" fill="none" stroke="#6b7280" stroke-width="2" stroke-dasharray="5,5" />'
     
     if res["TOTAL"] > 0:
         for i in range(res["NW"]):
             for j in range(res["NL"]):
-                # เริ่มวาดช่องจากขอบบ่าด้านใน (tray_margin)
                 x = tray_margin + res["PITCH_W"] + i * (res["SW"] + res["PITCH_W"])
                 y = tray_margin + res["PITCH_L"] + j * (res["SL"] + res["PITCH_L"])
                 svg += f'<rect x="{x}" y="{y}" width="{res["SW"]}" height="{res["SL"]}" fill="#f3f4f6" stroke="#9ca3af" stroke-width="1" />'
@@ -157,7 +165,7 @@ with col1:
         m3.metric("Draw Ratio", f"{best['RATIO']:.2f}")
         st.write(generate_svg_tray(best), unsafe_allow_html=True)
     else:
-        st.error("ไม่มีรูปแบบการวางที่ผ่านเกณฑ์ DFM")
+        st.error("ไม่มีรูปแบบการวางที่ผ่านเกณฑ์ DFM หรือ ไม่พบรูปแบบแนวนอนที่ผลิตได้")
 
 with col2:
     st.subheader("🥈 Alternative Option")
@@ -171,7 +179,7 @@ with col2:
         st.write("ไม่มีทางเลือกสำรองที่เหมาะสม")
 
 st.write("---")
-st.subheader("📊 6-Way Full Analysis Table")
+st.subheader("📊 Full Analysis Table")
 table_data = []
 for r in results:
     table_data.append({
