@@ -5,7 +5,7 @@ import math
 st.set_page_config(page_title="Tray Layout Optimizer", layout="wide")
 
 st.title("🛠️ NPI Tray Design Layout Optimizer (Capacity First)")
-st.write("ระบบคัดเลือก Layout ที่เน้นจำนวน Slot สูงสุด ภายใต้เงื่อนไขที่ผลิตได้จริง")
+st.write("ระบบคัดเลือก Layout ที่เน้นจำนวน Slot สูงสุด ภายใต้เงื่อนไขที่ผลิตได้จริง (พร้อม DFM Checklist)")
 
 # --- SIDEBAR: INPUT PARAMETERS ---
 st.sidebar.header("1. Product Dimensions (mm)")
@@ -16,32 +16,53 @@ p_h = st.sidebar.number_input("Product Height (H)", value=15.0, step=1.0)
 st.sidebar.header("2. Tray Specification (mm)")
 overall_w = st.sidebar.number_input("Tray Overall Width", value=375.0)
 overall_l = st.sidebar.number_input("Tray Overall Length", value=260.0)
+# [NEW] หักระยะขอบบ่าถาดสำหรับการซ้อน Stacking
+tray_margin = st.sidebar.number_input("Tray Edge Margin (Stacking Shoulder)", value=15.0, help="ระยะขอบรอบนอกสำหรับรับน้ำหนักถาดใบบน")
 
 st.sidebar.header("3. Engineering Clearances")
 c_wide = st.sidebar.slider("Wide Plane Clearance (>=30mm)", 5.0, 20.0, 14.0)
 c_narrow = st.sidebar.slider("Narrow Plane Clearance (<30mm)", 5.0, 20.0, 11.0)
 c_h_depth = st.sidebar.number_input("Vertical Clearance (Safety Margin)", value=12.0)
+# [NEW] การหยิบจับ เพื่อเพิ่ม Finger Slot
+handling = st.sidebar.radio("Assembly Handling Method", ["Automation (Robotic/Vacuum)", "Manual (Need Finger Slots)"])
 
 st.sidebar.header("4. DFM & Material Limits")
-temp_clearance = st.sidebar.number_input("DFM Pitch (Between Slots)", value=8.0)
-max_depth_ratio = st.sidebar.slider("Max Depth Ratio (Closed Pocket)", 1.0, 5.0, 2.5)
+temp_clearance = st.sidebar.number_input("DFM Pitch (Wall Between Slots)", value=8.0)
+max_depth_ratio = st.sidebar.slider("Max Depth Ratio (Draw Ratio)", 1.0, 5.0, 2.5)
 max_material_limit = st.sidebar.number_input("Max Material Limit (Total Height)", value=85.0)
+# [NEW] Draft Angle เผื่อความบานของปากช่องตามความลึก
+draft_angle = st.sidebar.number_input("Draft Angle (Degrees)", value=3.0)
 
 # --- CALCULATION ENGINE ---
 def calculate_layout_params(pw_used, pl_used, ph_used, orientation_name):
     clearance_w = c_wide if pw_used >= 30 else c_narrow
     clearance_l = c_wide if pl_used >= 30 else c_narrow
     
-    slot_w = pw_used + clearance_w
-    slot_l = pl_used + clearance_l
+    # [NEW] เผื่อช่องล้วงนิ้ว (Finger Slot) เข้าไปในด้านที่ยาวกว่า หากเป็น Manual
+    if handling == "Manual (Need Finger Slots)":
+        if pw_used >= pl_used:
+            clearance_w += 20.0
+        else:
+            clearance_l += 20.0
+            
     slot_h = ph_used + c_h_depth
+    
+    # [NEW] คำนวณ Draft Angle Effect (ยิ่งลึก ปากยิ่งกว้าง)
+    draft_expansion = 2 * (slot_h * math.tan(math.radians(draft_angle)))
+    
+    slot_w = pw_used + clearance_w + draft_expansion
+    slot_l = pl_used + clearance_l + draft_expansion
     
     min_plane_dim = min(slot_w, slot_l)
     current_ratio = slot_h / min_plane_dim
     
+    # [NEW] คำนวณพื้นที่ใช้งานจริง หักขอบ Stacking ออกแล้ว
+    usable_w = overall_w - (2 * tray_margin)
+    usable_l = overall_l - (2 * tray_margin)
+    
     # Layout Calculation
-    slots_nw = math.floor((overall_w - temp_clearance) / (slot_w + temp_clearance))
-    slots_nl = math.floor((overall_l - temp_clearance) / (slot_l + temp_clearance))
+    slots_nw = math.floor((usable_w - temp_clearance) / (slot_w + temp_clearance))
+    slots_nl = math.floor((usable_l - temp_clearance) / (slot_l + temp_clearance))
     total_slots = max(0, slots_nw * slots_nl)
     
     # --- INTELLIGENT DFM & SCORING ---
@@ -52,7 +73,7 @@ def calculate_layout_params(pw_used, pl_used, ph_used, orientation_name):
     if total_slots == 0:
         status = "❌ DOES NOT FIT"
         score = 0
-        note = "Layout exceeds tray dimensions"
+        note = "Layout exceeds usable area"
     elif not is_material_feasible:
         status = "❌ MATERIAL LIMIT"
         score = 0
@@ -62,16 +83,16 @@ def calculate_layout_params(pw_used, pl_used, ph_used, orientation_name):
         score = 3  # ผลิตได้ชัวร์ (Grid)
         note = "Feasible (Closed Pocket)"
     elif is_single_row:
-        status = "⚠️ DFM WARNING"
-        score = 2  # ผลิตได้ (Rib Design)
-        note = f"Ratio {current_ratio:.2f} > {max_depth_ratio} (Rib Design Possible)"
+        status = "⚠️ WARNING (Rib Req.)"
+        score = 2  # ผลิตได้ แต่ต้องทำ Ribs
+        note = f"Ratio {current_ratio:.2f} > {max_depth_ratio} (Needs Rib Design)"
     else:
         status = "❌ DFM ERROR"
-        score = 1  # ผลิตไม่ได้จริง (Too deep Grid)
-        note = f"Ratio {current_ratio:.2f} > {max_depth_ratio}"
+        score = 1  # ลึกเกินไป ขึ้นรูปยากมาก
+        note = f"Ratio {current_ratio:.2f} > {max_depth_ratio} (Too Deep)"
 
-    pitch_w = (overall_w - (slots_nw * slot_w)) / (slots_nw + 1) if slots_nw > 0 else 0
-    pitch_l = (overall_l - (slots_nl * slot_l)) / (slots_nl + 1) if slots_nl > 0 else 0
+    pitch_w = (usable_w - (slots_nw * slot_w)) / (slots_nw + 1) if slots_nw > 0 else 0
+    pitch_l = (usable_l - (slots_nl * slot_l)) / (slots_nl + 1) if slots_nl > 0 else 0
 
     return {
         "NAME": orientation_name, "PW": pw_used, "PL": pl_used, "PH": ph_used,
@@ -91,30 +112,33 @@ for i in range(3):
     h_val, h_nm = dims[i], dim_names[i]
     rem_dims = [dims[j] for j in range(3) if j != i]
     rem_nms = [dim_names[j] for j in range(3) if j != i]
-    results.append(calculate_layout_params(rem_dims[0], rem_dims[1], h_val, f"Case {case_idx}: {rem_nms[0]}x{rem_nms[1]}x{h_nm}"))
+    results.append(calculate_layout_params(rem_dims[0], rem_dims[1], h_val, f"Case {case_idx}: {rem_nms[0]}x{rem_nms[1]}x{h_nm} (Z)"))
     case_idx += 1
-    results.append(calculate_layout_params(rem_dims[1], rem_dims[0], h_val, f"Case {case_idx}: {rem_nms[1]}x{rem_nms[0]}x{h_nm}"))
+    results.append(calculate_layout_params(rem_dims[1], rem_dims[0], h_val, f"Case {case_idx}: {rem_nms[1]}x{rem_nms[0]}x{h_nm} (Z)"))
     case_idx += 1
 
-# --- 🔥 CRITICAL CHANGE: SORTING LOGIC ---
-# 1. คัดเฉพาะท่าที่ "พอวางได้จริง" (Score >= 2)
-# 2. เรียงตามจำนวน TOTAL SLOTS เยอะที่สุดขึ้นก่อน
+# SORTING LOGIC
 practical_results = [r for r in results if r['SCORE'] >= 2]
-practical_results.sort(key=lambda x: x['TOTAL'], reverse=True)
-
-# ส่วนตารางข้างล่างให้เรียงตามสถานะเดิมเพื่อให้เห็นภาพรวม
+practical_results.sort(key=lambda x: (x['TOTAL'], -x['RATIO']), reverse=True) # เอาจำนวนมากสุด ถ้าระยะเท่ากันเอาลึกน้อยสุด
 results.sort(key=lambda x: (x['SCORE'], x['TOTAL']), reverse=True)
 
 # --- SVG PLOTTING ---
 def generate_svg_tray(res):
     color = "#16a34a" if res["SCORE"] == 3 else "#ca8a04" if res["SCORE"] == 2 else "#ef4444"
     svg = f'<svg width="100%" height="auto" viewBox="0 0 {overall_w} {overall_l}" xmlns="http://www.w3.org/2000/svg" style="background-color: white; border: 3px solid {color}; border-radius: 8px;">'
+    
+    # วาด Overall Box (ขอบนอก)
     svg += f'<rect width="100%" height="100%" fill="none" stroke="{color}" stroke-width="4" />'
+    
+    # วาด Usable Area Box (เส้นประแสดงขอบบ่ารับน้ำหนัก)
+    svg += f'<rect x="{tray_margin}" y="{tray_margin}" width="{overall_w - 2*tray_margin}" height="{overall_l - 2*tray_margin}" fill="none" stroke="#6b7280" stroke-width="2" stroke-dasharray="5,5" />'
+    
     if res["TOTAL"] > 0:
         for i in range(res["NW"]):
             for j in range(res["NL"]):
-                x = res["PITCH_W"] + i * (res["SW"] + res["PITCH_W"])
-                y = res["PITCH_L"] + j * (res["SL"] + res["PITCH_L"])
+                # เริ่มวาดช่องจากขอบบ่าด้านใน (tray_margin)
+                x = tray_margin + res["PITCH_W"] + i * (res["SW"] + res["PITCH_W"])
+                y = tray_margin + res["PITCH_L"] + j * (res["SL"] + res["PITCH_L"])
                 svg += f'<rect x="{x}" y="{y}" width="{res["SW"]}" height="{res["SL"]}" fill="#f3f4f6" stroke="#9ca3af" stroke-width="1" />'
     svg += '</svg>'
     return svg
@@ -122,7 +146,7 @@ def generate_svg_tray(res):
 # --- DISPLAY ---
 col1, col2 = st.columns(2)
 with col1:
-    st.subheader("🥇 Best Capacity Option (Practical)")
+    st.subheader("🥇 Best Capacity Option")
     if practical_results:
         best = practical_results[0]
         st.markdown(f"### {best['STATUS']}")
@@ -130,13 +154,13 @@ with col1:
         m1, m2, m3 = st.columns(3)
         m1.metric("Total Slots", f"{best['TOTAL']} Pcs")
         m2.metric("Tray Thick", f"{best['SH']:.1f} mm")
-        m3.metric("Depth Ratio", f"{best['RATIO']:.2f}")
+        m3.metric("Draw Ratio", f"{best['RATIO']:.2f}")
         st.write(generate_svg_tray(best), unsafe_allow_html=True)
     else:
-        st.error("ไม่มีรูปแบบการวางที่ผลิตได้จริง")
+        st.error("ไม่มีรูปแบบการวางที่ผ่านเกณฑ์ DFM")
 
 with col2:
-    st.subheader("🥈 Alternative Practical Option")
+    st.subheader("🥈 Alternative Option")
     if len(practical_results) > 1:
         runner_up = practical_results[1]
         st.markdown(f"### {runner_up['STATUS']}")
@@ -156,7 +180,7 @@ for r in results:
         "Layout": f"{r['NW']}x{r['NL']}",
         "Tray Thick (mm)": f"{r['SH']:.1f}",
         "Total Slots": r["TOTAL"],
-        "Depth Ratio": f"{r['RATIO']:.2f}",
+        "Draw Ratio": f"{r['RATIO']:.2f}",
         "Note": r["NOTE"]
     })
 st.dataframe(table_data, use_container_width=True)
