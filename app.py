@@ -4,7 +4,7 @@ import math
 # ============================================================
 # APP CONFIG
 # ============================================================
-APP_VERSION = "V0.3.1 — Clean Top View + Dual Section Review"
+APP_VERSION = "V0.3.2 — Vertical Dual Section Review"
 
 st.set_page_config(
     page_title=f"Tray Layout Optimizer {APP_VERSION}",
@@ -226,13 +226,13 @@ section_view_mode = st.sidebar.selectbox(
     ],
     index=0,
     help=(
-        "Default แสดง X และ Y section พร้อมกันเพื่อ engineering review. "
+        "Default แสดง X และ Y section เรียงแนวตั้งเต็มความกว้างเพื่อ engineering review. "
         "Auto จะเลือก section ของ floor plane ที่มี bottom-pocket dimension เล็กกว่า."
     ),
 )
 
 st.sidebar.caption(
-    "V0.3.1 Visualization only: solver / capacity ranking remains unchanged from V0.2.1."
+    "V0.3.2 Visualization only: X/Y sections are stacked vertically; solver / capacity ranking remains unchanged from V0.2.1."
 )
 
 # ============================================================
@@ -978,24 +978,20 @@ def render_section_view(res):
     if section_view_mode == "Show Both — Recommended":
         st.caption(
             "Dual engineering section: X = Width plane, Y = Length plane. "
-            "Both views use the same pocket depth and product height from the selected layout."
+            "Views are stacked vertically so each section can use the full option width."
         )
 
-        sx, sy = st.columns(2)
+        st.markdown("**X Section — Width Plane**")
+        st.write(
+            generate_section_svg(res, "X"),
+            unsafe_allow_html=True,
+        )
 
-        with sx:
-            st.markdown("**X Section — Width Plane**")
-            st.write(
-                generate_section_svg(res, "X"),
-                unsafe_allow_html=True,
-            )
-
-        with sy:
-            st.markdown("**Y Section — Length Plane**")
-            st.write(
-                generate_section_svg(res, "Y"),
-                unsafe_allow_html=True,
-            )
+        st.markdown("**Y Section — Length Plane**")
+        st.write(
+            generate_section_svg(res, "Y"),
+            unsafe_allow_html=True,
+        )
 
     else:
         if section_view_mode == "X Section — Width Plane":
@@ -1251,7 +1247,7 @@ They are **not ESD-bag allowances**.
 - Green = **Pure Product Maximum Envelope**.
 - Product is assumed to rest on the **Pocket Bottom** for RFQ section screening.
 - Therefore `Product Top below Tray Top = Pocket Depth - Product Height`.
-- Default Section View = **Show Both** so Width and Length planes can be reviewed together.
+- Default Section View = **Show Both** with Width and Length planes stacked vertically for better readability.
 - `Auto — Critical Plane` remains available when a single representative section is preferred.
 - The visual does **not** infer actual PCBA component height maps or local connector/keep-out geometry.
 
