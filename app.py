@@ -4,7 +4,7 @@ import math
 # ============================================================
 # APP CONFIG
 # ============================================================
-APP_VERSION = "V0.2 — RFQ Calibrated"
+APP_VERSION = "V0.2.1 — RFQ Shoulder Reserve"
 
 st.set_page_config(
     page_title=f"Tray Layout Optimizer {APP_VERSION}",
@@ -74,6 +74,18 @@ tray_margin = st.sidebar.number_input(
     help=(
         "ระยะขอบที่กันไว้จาก Overall Tray ก่อนเริ่มพื้นที่ cavity layout "
         "Default 5 mm สำหรับ RFQ concept; ถ้า tray supplier / stacking feature ต้องการมากกว่านี้ให้เพิ่มภายหลัง"
+    ),
+)
+
+shoulder_reserve = st.sidebar.number_input(
+    "Minimum Pocket-to-Shoulder Reserve",
+    min_value=0.0,
+    max_value=10.0,
+    value=2.0,
+    step=0.5,
+    help=(
+        "ระยะขั้นต่ำจากขอบพื้นที่ Stacking Shoulder ถึงขอบ Pocket Opening. "
+        "Default RFQ = 2 mm/side เพื่อไม่ให้ cavity ชิด shoulder เกินไป"
     ),
 )
 
@@ -287,21 +299,30 @@ def calculate_layout_params(pw_used, pl_used, ph_used, orientation_name):
     usable_w = overall_w - (2.0 * tray_margin)
     usable_l = overall_l - (2.0 * tray_margin)
 
+    # V0.2.1:
+    # Reserve a minimum gap between the Stacking Shoulder boundary
+    # and the first/last Pocket Opening.
+    layout_w = max(0.0, usable_w - (2.0 * shoulder_reserve))
+    layout_l = max(0.0, usable_l - (2.0 * shoulder_reserve))
+
     # Correct cavity count:
-    # N*pocket + (N-1)*web <= usable_span
+    # N*pocket + (N-1)*web <= layout_span
     slots_nw = floor_count_with_internal_web(
-        usable_w,
+        layout_w,
         slot_w,
         req_web,
     )
     slots_nl = floor_count_with_internal_web(
-        usable_l,
+        layout_l,
         slot_l,
         req_web,
     )
 
     total_slots = slots_nw * slots_nl
 
+    # Center the selected grid inside the full usable region.
+    # This means EDGE_FREE_* is the actual Pocket-to-Shoulder gap
+    # after layout selection and will normally be >= shoulder_reserve.
     used_w, edge_free_w, actual_web_w = centered_grid_geometry(
         usable_w,
         slot_w,
@@ -384,9 +405,12 @@ def calculate_layout_params(pw_used, pl_used, ph_used, orientation_name):
 
         "USABLE_W": usable_w,
         "USABLE_L": usable_l,
+        "LAYOUT_W": layout_w,
+        "LAYOUT_L": layout_l,
         "USED_W": used_w,
         "USED_L": used_l,
 
+        "SHOULDER_RESERVE": shoulder_reserve,
         "EDGE_FREE_W": edge_free_w,
         "EDGE_FREE_L": edge_free_l,
 
@@ -509,12 +533,25 @@ def generate_svg_tray(res):
         f'fill="#ffffff" stroke="{color}" stroke-width="4" />'
     )
 
-    # Usable layout boundary.
+    # Stacking shoulder / usable boundary.
     svg += (
         f'<rect x="{tray_margin}" y="{tray_margin}" '
         f'width="{res["USABLE_W"]}" height="{res["USABLE_L"]}" '
         f'fill="#f8fafc" stroke="#64748b" stroke-width="1.5" '
         f'stroke-dasharray="5,5" />'
+    )
+
+    # Minimum pocket-to-shoulder reserve boundary.
+    reserve_x = tray_margin + res["SHOULDER_RESERVE"]
+    reserve_y = tray_margin + res["SHOULDER_RESERVE"]
+    reserve_w = max(0.0, res["USABLE_W"] - 2.0 * res["SHOULDER_RESERVE"])
+    reserve_l = max(0.0, res["USABLE_L"] - 2.0 * res["SHOULDER_RESERVE"])
+
+    svg += (
+        f'<rect x="{reserve_x}" y="{reserve_y}" '
+        f'width="{reserve_w}" height="{reserve_l}" '
+        f'fill="none" stroke="#f59e0b" stroke-width="0.9" '
+        f'stroke-dasharray="2,2" />'
     )
 
     if res["TOTAL"] > 0:
@@ -559,15 +596,16 @@ st.info(
     f"Wide clearance = {c_wide:.1f} mm total • "
     f"Narrow clearance = {c_narrow:.1f} mm total • "
     f"Vertical headroom = {c_h_depth:.1f} mm • "
+    f"Pocket-to-Shoulder reserve = {shoulder_reserve:.1f} mm/side • "
     f"Base web = {base_web_clearance:.1f} mm • "
     f"Draft = {draft_angle:.1f}°. "
     "These are concept-screening assumptions, not final supplier DFM values."
 )
 
 st.caption(
-    "Important V0.2 change: Tray Edge Margin is reserved only at the outer tray boundary. "
-    "Minimum Web is counted only BETWEEN adjacent cavity openings. "
-    "This avoids the previous double-counting that could unnecessarily remove one row/column."
+    "V0.2.1 geometry rule: Tray Edge Margin defines the stacking-shoulder boundary; "
+    f"Pocket openings must remain at least {shoulder_reserve:.1f} mm inside that boundary. "
+    "Minimum Web is counted only BETWEEN adjacent cavity openings."
 )
 
 # ============================================================
@@ -600,10 +638,28 @@ with col1:
             f"{best['SW']:.1f} × {best['SL']:.1f}",
         )
         s3.metric("Min Web", f"{best['REQ_PITCH']:.1f} mm")
+        actual_shoulder_gap = min(best["EDGE_FREE_W"], best["EDGE_FREE_L"])
+
         s4.metric(
-            "Residual Edge",
-            f"{min(best['EDGE_FREE_W'], best['EDGE_FREE_L']):.1f} mm",
+            "Pocket-to-Shoulder Gap",
+            f"{actual_shoulder_gap:.1f} mm",
         )
+
+        if actual_shoulder_gap < shoulder_reserve + 0.5:
+            st.warning(
+                f"⚠️ Tight shoulder fit: actual gap = {actual_shoulder_gap:.1f} mm "
+                f"(minimum target = {shoulder_reserve:.1f} mm)."
+            )
+        elif actual_shoulder_gap < shoulder_reserve + 2.0:
+            st.info(
+                f"ℹ️ Shoulder gap is acceptable but relatively tight: "
+                f"{actual_shoulder_gap:.1f} mm."
+            )
+        else:
+            st.success(
+                f"✅ Comfortable pocket-to-shoulder gap: "
+                f"{actual_shoulder_gap:.1f} mm."
+            )
 
         st.write(generate_svg_tray(best), unsafe_allow_html=True)
         st.caption(best["NOTE"])
@@ -621,10 +677,14 @@ with col2:
         st.markdown(f"### {runner_up['STATUS']}")
         st.write(f"**{runner_up['NAME']}**")
 
-        m1, m2, m3 = st.columns(3)
+        m1, m2, m3, m4 = st.columns(4)
         m1.metric("Total Slots", f"{runner_up['TOTAL']} pcs")
         m2.metric("Layout", f"{runner_up['NW']} × {runner_up['NL']}")
         m3.metric("Pocket Depth", f"{runner_up['SH']:.1f} mm")
+        m4.metric(
+            "Pocket-to-Shoulder Gap",
+            f"{min(runner_up['EDGE_FREE_W'], runner_up['EDGE_FREE_L']):.1f} mm",
+        )
 
         st.write(generate_svg_tray(runner_up), unsafe_allow_html=True)
         st.caption(runner_up["NOTE"])
@@ -654,8 +714,9 @@ for r in results:
             "Pocket Depth": f"{r['SH']:.1f}",
             "Depth Index": f"{r['RATIO']:.2f}",
             "Min Web": f"{r['REQ_PITCH']:.1f}",
-            "Edge Free W": f"{r['EDGE_FREE_W']:.1f}",
-            "Edge Free L": f"{r['EDGE_FREE_L']:.1f}",
+            "Shoulder Min": f"{r['SHOULDER_RESERVE']:.1f}",
+            "Pocket-Shoulder W": f"{r['EDGE_FREE_W']:.1f}",
+            "Pocket-Shoulder L": f"{r['EDGE_FREE_L']:.1f}",
             "Note": r["NOTE"],
         }
     )
@@ -685,11 +746,18 @@ They are **not ESD-bag allowances**.
 - The previous +12 mm assumption was intentionally conservative, but it also increased
   draft expansion and could reduce tray capacity unnecessarily.
 
+**Pocket-to-Shoulder reserve**
+- Default = **2 mm/side**
+- This is measured from the inner Stacking Shoulder boundary to the nearest Pocket Opening.
+- It prevents a capacity-first layout from pushing the cavity almost onto the shoulder line.
+- Overall minimum distance from tray outer edge to pocket is therefore approximately:
+  `Tray Edge Margin + Pocket-to-Shoulder Reserve`.
+
 **Inter-pocket web**
 - Base = **6 mm**
 - Dynamic addition = `Pocket Depth Index × 1.0`
 - The web is counted **between adjacent pockets only**.
-- Outer edge protection is already controlled separately by `Tray Edge Margin`.
+- Outer edge protection is controlled separately by `Tray Edge Margin + Shoulder Reserve`.
 
 **Manual handling**
 - Finger notch / finger access should normally be a **local feature**.
