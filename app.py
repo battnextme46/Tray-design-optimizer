@@ -4,7 +4,7 @@ import math
 # ============================================================
 # APP CONFIG
 # ============================================================
-APP_VERSION = "V0.3 — Product Envelope + Engineering Section View"
+APP_VERSION = "V0.3.1 — Clean Top View + Dual Section Review"
 
 st.set_page_config(
     page_title=f"Tray Layout Optimizer {APP_VERSION}",
@@ -202,24 +202,37 @@ draft_angle = st.sidebar.number_input(
 
 st.sidebar.header("5. Visualization")
 
-section_view_mode = st.sidebar.selectbox(
-    "Section View Direction",
-    options=[
-        "Auto — Critical Plane",
-        "X Section — Width Plane",
-        "Y Section — Length Plane",
-        "Show Both",
+top_view_mode = st.sidebar.radio(
+    "Top View Detail",
+    [
+        "Simple — Recommended",
+        "Engineering Detail",
     ],
     index=0,
     help=(
-        "Auto จะเลือก section ของ floor plane ที่มี bottom-pocket dimension เล็กกว่า "
-        "เพราะมักเป็นแกนที่มีความเสี่ยงเรื่อง depth/fit สูงกว่า. "
-        "Show Both ใช้สำหรับ engineering review."
+        "Simple แสดง Tray + Pocket Opening + Product เท่านั้น. "
+        "Engineering Detail จะแสดง Pocket Bottom / clearance envelope "
+        "และ shoulder-reserve boundary เพิ่มเติม"
+    ),
+)
+
+section_view_mode = st.sidebar.selectbox(
+    "Section View Direction",
+    options=[
+        "Show Both — Recommended",
+        "Auto — Critical Plane",
+        "X Section — Width Plane",
+        "Y Section — Length Plane",
+    ],
+    index=0,
+    help=(
+        "Default แสดง X และ Y section พร้อมกันเพื่อ engineering review. "
+        "Auto จะเลือก section ของ floor plane ที่มี bottom-pocket dimension เล็กกว่า."
     ),
 )
 
 st.sidebar.caption(
-    "V0.3 Visualization only: solver / capacity ranking remains unchanged from V0.2.1."
+    "V0.3.1 Visualization only: solver / capacity ranking remains unchanged from V0.2.1."
 )
 
 # ============================================================
@@ -534,14 +547,20 @@ results.sort(
 # ============================================================
 def generate_svg_tray(res):
     """
-    Engineering Top View.
+    V0.3.1 Engineering Top View.
 
-    Visual layers:
-      - green = pure product bounding envelope
-      - blue dashed = bottom pocket / fit-clearance envelope
-      - grey = draft-expanded pocket top opening
-      - grey dashed = stacking-shoulder boundary
-      - orange dashed = minimum pocket-to-shoulder reserve boundary
+    SIMPLE mode (default):
+      - tray outer boundary
+      - stacking shoulder boundary
+      - pocket top opening
+      - PURE product envelope in green
+
+    ENGINEERING DETAIL mode:
+      - adds bottom-pocket / fit-clearance envelope
+      - adds minimum shoulder-reserve boundary
+
+    Product is always drawn as a clear green body so the user can
+    visually distinguish the product from the pocket.
     """
     color = (
         "#16a34a"
@@ -551,9 +570,10 @@ def generate_svg_tray(res):
         else "#ef4444"
     )
 
+    extra_h = 12.0
     svg = (
         f'<svg width="100%" height="auto" '
-        f'viewBox="0 0 {overall_w} {overall_l + 18}" '
+        f'viewBox="0 0 {overall_w} {overall_l + extra_h}" '
         f'xmlns="http://www.w3.org/2000/svg" '
         f'style="background-color:white;border:3px solid {color};'
         f'border-radius:8px;">'
@@ -569,28 +589,30 @@ def generate_svg_tray(res):
     svg += (
         f'<rect x="{tray_margin}" y="{tray_margin}" '
         f'width="{res["USABLE_W"]}" height="{res["USABLE_L"]}" '
-        f'fill="#f8fafc" stroke="#64748b" stroke-width="1.5" '
+        f'fill="#f8fafc" stroke="#64748b" stroke-width="1.3" '
         f'stroke-dasharray="5,5" />'
     )
 
-    # Minimum pocket-to-shoulder reserve boundary.
-    reserve_x = tray_margin + res["SHOULDER_RESERVE"]
-    reserve_y = tray_margin + res["SHOULDER_RESERVE"]
-    reserve_w = max(
-        0.0,
-        res["USABLE_W"] - 2.0 * res["SHOULDER_RESERVE"],
-    )
-    reserve_l = max(
-        0.0,
-        res["USABLE_L"] - 2.0 * res["SHOULDER_RESERVE"],
-    )
+    engineering_detail = top_view_mode == "Engineering Detail"
 
-    svg += (
-        f'<rect x="{reserve_x}" y="{reserve_y}" '
-        f'width="{reserve_w}" height="{reserve_l}" '
-        f'fill="none" stroke="#f59e0b" stroke-width="0.9" '
-        f'stroke-dasharray="2,2" />'
-    )
+    if engineering_detail:
+        reserve_x = tray_margin + res["SHOULDER_RESERVE"]
+        reserve_y = tray_margin + res["SHOULDER_RESERVE"]
+        reserve_w = max(
+            0.0,
+            res["USABLE_W"] - 2.0 * res["SHOULDER_RESERVE"],
+        )
+        reserve_l = max(
+            0.0,
+            res["USABLE_L"] - 2.0 * res["SHOULDER_RESERVE"],
+        )
+
+        svg += (
+            f'<rect x="{reserve_x}" y="{reserve_y}" '
+            f'width="{reserve_w}" height="{reserve_l}" '
+            f'fill="none" stroke="#f59e0b" stroke-width="0.9" '
+            f'stroke-dasharray="2,2" />'
+        )
 
     if res["TOTAL"] > 0:
         start_x = tray_margin + res["EDGE_FREE_W"]
@@ -601,7 +623,7 @@ def generate_svg_tray(res):
                 x = start_x + i * (res["SW"] + res["WEB_W"])
                 y = start_y + j * (res["SL"] + res["WEB_L"])
 
-                # Draft-expanded top opening.
+                # Pocket top opening.
                 svg += (
                     f'<rect x="{x}" y="{y}" '
                     f'width="{res["SW"]}" height="{res["SL"]}" '
@@ -609,41 +631,46 @@ def generate_svg_tray(res):
                     f'stroke-width="0.9" rx="1" />'
                 )
 
-                # Bottom pocket / clearance envelope.
+                # Bottom pocket / fit-clearance envelope.
                 inset = res["DRAFT_EACH_SIDE"]
                 bottom_x = x + inset
                 bottom_y = y + inset
                 bottom_w = res["BOTTOM_W"]
                 bottom_l = res["BOTTOM_L"]
 
-                svg += (
-                    f'<rect x="{bottom_x}" y="{bottom_y}" '
-                    f'width="{bottom_w}" height="{bottom_l}" '
-                    f'fill="#dbeafe" fill-opacity="0.22" '
-                    f'stroke="#2563eb" stroke-width="0.8" '
-                    f'stroke-dasharray="3,2" rx="1" />'
-                )
+                if engineering_detail:
+                    svg += (
+                        f'<rect x="{bottom_x}" y="{bottom_y}" '
+                        f'width="{bottom_w}" height="{bottom_l}" '
+                        f'fill="none" '
+                        f'stroke="#2563eb" stroke-width="0.8" '
+                        f'stroke-dasharray="3,2" rx="1" />'
+                    )
 
-                # PURE PRODUCT envelope centered inside the bottom pocket.
+                # PURE PRODUCT envelope centered in pocket bottom.
                 product_x = bottom_x + res["CLEAR_W"] / 2.0
                 product_y = bottom_y + res["CLEAR_L"] / 2.0
 
                 svg += (
                     f'<rect x="{product_x}" y="{product_y}" '
                     f'width="{res["PW"]}" height="{res["PL"]}" '
-                    f'fill="#22c55e" fill-opacity="0.72" '
+                    f'fill="#22c55e" fill-opacity="0.78" '
                     f'stroke="#15803d" stroke-width="0.9" rx="0.8" />'
                 )
 
-    # Legend.
-    legend_y = overall_l + 12
+    # Keep the legend short and fully inside the SVG.
+    legend = (
+        "Green = Product   |   Grey = Pocket Opening"
+        if not engineering_detail
+        else
+        "Green = Product   |   Grey = Pocket Opening   |   "
+        "Blue dashed = Pocket Bottom   |   Orange dashed = Shoulder Reserve"
+    )
+
     svg += (
-        f'<text x="{overall_w/2}" y="{legend_y}" '
-        f'font-family="system-ui,sans-serif" font-size="6.4" '
-        f'fill="#475569" text-anchor="middle">'
-        f'Green = Product Envelope • Blue dashed = Pocket Bottom / Fit Clearance • '
-        f'Grey = Top Opening • Orange dashed = Shoulder Reserve Boundary'
-        f'</text>'
+        f'<text x="{overall_w/2}" y="{overall_l + 8}" '
+        f'font-family="system-ui,sans-serif" font-size="5.2" '
+        f'fill="#475569" text-anchor="middle">{legend}</text>'
     )
 
     svg += "</svg>"
@@ -689,13 +716,17 @@ def get_section_plane_data(res, plane):
 
 def generate_section_svg(res, plane):
     """
-    Representative 2D engineering section of up to 3 adjacent pockets.
+    Clean representative engineering section of up to 3 adjacent pockets.
 
-    Assumption for RFQ concept:
-      product rests on the pocket bottom.
-      therefore:
-        Product Top below Tray Top = Pocket Depth - Product Height
-                                   = Vertical Headroom
+    V0.3.1 keeps only short in-drawing labels:
+      - TRAY TOP
+      - Headroom
+      - Pocket depth
+      - Product H
+      - Web
+      - Bottom / Top opening sizes
+
+    Longer engineering explanations are rendered outside the SVG.
     """
     d = get_section_plane_data(res, plane)
 
@@ -709,22 +740,28 @@ def generate_section_svg(res, plane):
     product_height = res["PH"]
     top_clearance = max(0.0, pocket_depth - product_height)
 
-    # Drawing scaling.
-    scale_x = 2.1
-    scale_z = 2.8
+    # Compact engineering drawing scale.
+    scale_x = 1.75
+    scale_z = 2.15
 
-    left_pad = 42.0
-    right_pad = 42.0
-    top_pad = 58.0
-    bottom_pad = 48.0
+    left_pad = 58.0
+    right_pad = 72.0
+    top_pad = 50.0
+    bottom_pad = 62.0
 
     section_span = (
         sample_count * pocket_top
         + max(0, sample_count - 1) * web
     )
 
-    view_w = left_pad + section_span * scale_x + right_pad
-    view_h = top_pad + pocket_depth * scale_z + bottom_pad
+    view_w = max(
+        420.0,
+        left_pad + section_span * scale_x + right_pad,
+    )
+    view_h = max(
+        310.0,
+        top_pad + pocket_depth * scale_z + bottom_pad,
+    )
 
     y_top = top_pad
     y_bottom = y_top + pocket_depth * scale_z
@@ -736,33 +773,24 @@ def generate_section_svg(res, plane):
         f'style="background:#ffffff;border:2px solid #334155;border-radius:10px;">'
     )
 
-    # Title.
+    # Short title.
     svg += (
-        f'<text x="{view_w/2}" y="24" '
-        f'font-family="system-ui,sans-serif" font-size="13" '
+        f'<text x="{view_w/2}" y="21" '
+        f'font-family="system-ui,sans-serif" font-size="12" '
         f'font-weight="700" fill="#0f172a" text-anchor="middle">'
-        f'{d["title"]} • Representative {sample_count} pocket(s)'
-        f'</text>'
+        f'{d["title"]}</text>'
     )
 
-    svg += (
-        f'<text x="{view_w/2}" y="41" '
-        f'font-family="system-ui,sans-serif" font-size="7.5" '
-        f'fill="#64748b" text-anchor="middle">'
-        f'{d["axis_label"]}'
-        f'</text>'
-    )
-
-    # Tray top reference line.
+    # Tray top reference.
     svg += (
         f'<line x1="{left_pad-14}" y1="{y_top}" '
-        f'x2="{view_w-right_pad+14}" y2="{y_top}" '
-        f'stroke="#0f172a" stroke-width="2.2" />'
+        f'x2="{view_w-right_pad+16}" y2="{y_top}" '
+        f'stroke="#0f172a" stroke-width="2.3" />'
     )
     svg += (
-        f'<text x="{left_pad-18}" y="{y_top-5}" '
-        f'font-family="system-ui,sans-serif" font-size="7" '
-        f'fill="#0f172a" text-anchor="start">TRAY TOP</text>'
+        f'<text x="{left_pad-10}" y="{y_top-8}" '
+        f'font-family="system-ui,sans-serif" font-size="8" '
+        f'fill="#0f172a">TRAY TOP</text>'
     )
 
     current_x = left_pad
@@ -771,24 +799,22 @@ def generate_section_svg(res, plane):
         top_left = current_x
         top_right = current_x + pocket_top * scale_x
 
-        # Bottom opening is centered relative to top opening.
         draft_inset = (pocket_top - pocket_bottom) * scale_x / 2.0
         bottom_left = top_left + draft_inset
         bottom_right = top_right - draft_inset
 
-        # Pocket interior fill.
         pocket_points = (
             f"{top_left},{y_top} "
             f"{top_right},{y_top} "
             f"{bottom_right},{y_bottom} "
             f"{bottom_left},{y_bottom}"
         )
+
         svg += (
             f'<polygon points="{pocket_points}" '
             f'fill="#f8fafc" stroke="none" />'
         )
 
-        # Drafted pocket walls.
         svg += (
             f'<line x1="{top_left}" y1="{y_top}" '
             f'x2="{bottom_left}" y2="{y_bottom}" '
@@ -799,15 +825,13 @@ def generate_section_svg(res, plane):
             f'x2="{bottom_right}" y2="{y_bottom}" '
             f'stroke="#64748b" stroke-width="1.5" />'
         )
-
-        # Pocket bottom.
         svg += (
             f'<line x1="{bottom_left}" y1="{y_bottom}" '
             f'x2="{bottom_right}" y2="{y_bottom}" '
-            f'stroke="#475569" stroke-width="1.6" />'
+            f'stroke="#475569" stroke-width="1.7" />'
         )
 
-        # Product bounding envelope — GREEN.
+        # Product envelope.
         product_w_px = product_span * scale_x
         product_h_px = product_height * scale_z
 
@@ -820,84 +844,106 @@ def generate_section_svg(res, plane):
         svg += (
             f'<rect x="{product_x}" y="{product_y}" '
             f'width="{product_w_px}" height="{product_h_px}" '
-            f'fill="#22c55e" fill-opacity="0.76" '
+            f'fill="#22c55e" fill-opacity="0.78" '
             f'stroke="#15803d" stroke-width="1.2" rx="1.5" />'
         )
 
-        # Product top reference.
-        svg += (
-            f'<line x1="{product_x}" y1="{product_y}" '
-            f'x2="{product_x+product_w_px}" y2="{product_y}" '
-            f'stroke="#166534" stroke-width="1.0" stroke-dasharray="3,2" />'
-        )
+        # Label product height only on first pocket.
+        if idx == 0:
+            svg += (
+                f'<text x="{product_x + product_w_px/2}" '
+                f'y="{product_y + product_h_px/2}" '
+                f'font-family="system-ui,sans-serif" font-size="7.2" '
+                f'font-weight="700" fill="#14532d" '
+                f'text-anchor="middle">Product H {product_height:.1f}</text>'
+            )
 
-        # Web / tray top material between pockets.
+        # Web label between first and second pocket.
         if idx < sample_count - 1:
             web_x1 = top_right
             web_x2 = top_right + web * scale_x
+
             svg += (
                 f'<line x1="{web_x1}" y1="{y_top}" '
                 f'x2="{web_x2}" y2="{y_top}" '
                 f'stroke="#0f172a" stroke-width="3.2" />'
             )
 
+            if idx == 0:
+                svg += (
+                    f'<text x="{(web_x1+web_x2)/2}" y="{y_top-7}" '
+                    f'font-family="system-ui,sans-serif" font-size="7" '
+                    f'fill="#334155" text-anchor="middle">'
+                    f'Web {web:.1f}</text>'
+                )
+
         current_x = top_right + web * scale_x
 
-    # Vertical dimension: pocket depth.
-    dim_x = view_w - right_pad + 20
+    # Pocket depth dimension on right.
+    dim_x = view_w - right_pad + 26
     svg += (
-        f'<line x1="{dim_x}" y1="{y_top}" x2="{dim_x}" y2="{y_bottom}" '
-        f'stroke="#2563eb" stroke-width="1" />'
+        f'<line x1="{dim_x}" y1="{y_top}" '
+        f'x2="{dim_x}" y2="{y_bottom}" '
+        f'stroke="#2563eb" stroke-width="1.2" />'
     )
     svg += (
-        f'<line x1="{dim_x-4}" y1="{y_top}" x2="{dim_x+4}" y2="{y_top}" '
-        f'stroke="#2563eb" stroke-width="1" />'
+        f'<line x1="{dim_x-4}" y1="{y_top}" '
+        f'x2="{dim_x+4}" y2="{y_top}" '
+        f'stroke="#2563eb" stroke-width="1.2" />'
     )
     svg += (
-        f'<line x1="{dim_x-4}" y1="{y_bottom}" x2="{dim_x+4}" y2="{y_bottom}" '
-        f'stroke="#2563eb" stroke-width="1" />'
+        f'<line x1="{dim_x-4}" y1="{y_bottom}" '
+        f'x2="{dim_x+4}" y2="{y_bottom}" '
+        f'stroke="#2563eb" stroke-width="1.2" />'
     )
     svg += (
-        f'<text x="{dim_x+5}" y="{(y_top+y_bottom)/2}" '
-        f'font-family="system-ui,sans-serif" font-size="7" '
+        f'<text x="{dim_x+7}" y="{(y_top+y_bottom)/2}" '
+        f'font-family="system-ui,sans-serif" font-size="7.5" '
         f'fill="#1d4ed8">'
-        f'Pocket {pocket_depth:.1f} mm'
-        f'</text>'
+        f'Depth {pocket_depth:.1f}</text>'
     )
 
-    # Vertical dimension: top clearance / product top below tray top.
-    clearance_y = y_top + top_clearance * scale_z
-    clear_x = left_pad - 16
+    # Headroom dimension on left.
+    product_top_y = y_bottom - product_height * scale_z
+    clear_x = left_pad - 25
+
     svg += (
         f'<line x1="{clear_x}" y1="{y_top}" '
-        f'x2="{clear_x}" y2="{clearance_y}" '
+        f'x2="{clear_x}" y2="{product_top_y}" '
         f'stroke="#f59e0b" stroke-width="1.2" />'
     )
     svg += (
-        f'<text x="{clear_x-3}" y="{(y_top+clearance_y)/2}" '
-        f'font-family="system-ui,sans-serif" font-size="7" '
+        f'<line x1="{clear_x-4}" y1="{y_top}" '
+        f'x2="{clear_x+4}" y2="{y_top}" '
+        f'stroke="#f59e0b" stroke-width="1.2" />'
+    )
+    svg += (
+        f'<line x1="{clear_x-4}" y1="{product_top_y}" '
+        f'x2="{clear_x+4}" y2="{product_top_y}" '
+        f'stroke="#f59e0b" stroke-width="1.2" />'
+    )
+    svg += (
+        f'<text x="{clear_x-6}" y="{(y_top+product_top_y)/2}" '
+        f'font-family="system-ui,sans-serif" font-size="7.5" '
         f'fill="#b45309" text-anchor="end">'
-        f'Headroom {top_clearance:.1f} mm'
+        f'Gap {top_clearance:.1f}</text>'
+    )
+
+    # Compact footer values, centered and guaranteed inside viewBox.
+    svg += (
+        f'<text x="{view_w/2}" y="{view_h-34}" '
+        f'font-family="system-ui,sans-serif" font-size="7.2" '
+        f'fill="#475569" text-anchor="middle">'
+        f'Bottom {pocket_bottom:.1f} mm   |   '
+        f'Top {pocket_top:.1f} mm   |   Draft {draft_angle:.1f}°'
         f'</text>'
     )
 
-    # Bottom summary.
     svg += (
-        f'<text x="{view_w/2}" y="{view_h-25}" '
-        f'font-family="system-ui,sans-serif" font-size="7.5" '
+        f'<text x="{view_w/2}" y="{view_h-18}" '
+        f'font-family="system-ui,sans-serif" font-size="7.2" '
         f'fill="#475569" text-anchor="middle">'
-        f'Green = Product Maximum Envelope • '
-        f'Bottom Pocket = {pocket_bottom:.1f} mm • '
-        f'Top Opening = {pocket_top:.1f} mm • '
-        f'Web = {web:.1f} mm • Draft = {draft_angle:.1f}°'
-        f'</text>'
-    )
-    svg += (
-        f'<text x="{view_w/2}" y="{view_h-11}" '
-        f'font-family="system-ui,sans-serif" font-size="7.5" '
-        f'fill="#475569" text-anchor="middle">'
-        f'Product H = {product_height:.1f} mm • '
-        f'Product top is {top_clearance:.1f} mm below Tray Top'
+        f'Green = Product Maximum Envelope'
         f'</text>'
     )
 
@@ -914,13 +960,13 @@ def render_section_view(res):
     m3.metric("Top Clearance", f"{top_clearance:.1f} mm")
     m4.metric(
         "Product Position",
-        "✅ Below Tray Top" if top_clearance > 0.0 else "⚠️ Flush / Protrusion",
+        "Below Tray Top" if top_clearance > 0.0 else "Flush / Protrusion",
     )
 
     if top_clearance >= c_h_depth - 1e-9:
         st.success(
             f"✅ Product maximum envelope is {top_clearance:.1f} mm below Tray Top "
-            f"(target vertical headroom = {c_h_depth:.1f} mm)."
+            f"(target headroom = {c_h_depth:.1f} mm)."
         )
     elif top_clearance > 0:
         st.warning(
@@ -929,34 +975,47 @@ def render_section_view(res):
     else:
         st.error("❌ Product maximum envelope reaches or protrudes above Tray Top.")
 
-    if section_view_mode == "Show Both":
+    if section_view_mode == "Show Both — Recommended":
+        st.caption(
+            "Dual engineering section: X = Width plane, Y = Length plane. "
+            "Both views use the same pocket depth and product height from the selected layout."
+        )
+
         sx, sy = st.columns(2)
+
         with sx:
             st.markdown("**X Section — Width Plane**")
-            st.write(generate_section_svg(res, "X"), unsafe_allow_html=True)
+            st.write(
+                generate_section_svg(res, "X"),
+                unsafe_allow_html=True,
+            )
+
         with sy:
             st.markdown("**Y Section — Length Plane**")
-            st.write(generate_section_svg(res, "Y"), unsafe_allow_html=True)
+            st.write(
+                generate_section_svg(res, "Y"),
+                unsafe_allow_html=True,
+            )
 
     else:
         if section_view_mode == "X Section — Width Plane":
             plane = "X"
+            note = "Manual X / Width section."
         elif section_view_mode == "Y Section — Length Plane":
             plane = "Y"
+            note = "Manual Y / Length section."
         else:
             plane = choose_auto_section_plane(res)
+            note = (
+                "Auto selected the smaller bottom-pocket plane "
+                "as the critical representative section."
+            )
 
-        auto_note = (
-            "Auto selected the smaller bottom-pocket plane as the critical section."
-            if section_view_mode == "Auto — Critical Plane"
-            else "Manual section selection."
+        st.caption(note)
+        st.write(
+            generate_section_svg(res, plane),
+            unsafe_allow_html=True,
         )
-
-        st.caption(
-            f"{auto_note} Current section = "
-            f"{'X / Width' if plane == 'X' else 'Y / Length'}."
-        )
-        st.write(generate_section_svg(res, plane), unsafe_allow_html=True)
 
 
 def render_engineering_summary(res):
@@ -1049,11 +1108,17 @@ def render_option_result(res, title):
 
     with tab_top:
         st.write(generate_svg_tray(res), unsafe_allow_html=True)
-        st.caption(
-            "Top View legend: Green = Product Envelope • "
-            "Blue dashed = Pocket Bottom / Product Clearance • "
-            "Grey = Draft-expanded Top Opening."
-        )
+        if top_view_mode == "Simple — Recommended":
+            st.caption(
+                "Simple Top View: Green = Product • Grey = Pocket Top Opening. "
+                "Use Engineering Detail when you want to inspect the pocket-bottom clearance envelope."
+            )
+        else:
+            st.caption(
+                "Engineering Top View: Green = Product • Grey = Pocket Top Opening • "
+                "Blue dashed = Pocket Bottom / Fit Clearance • "
+                "Orange dashed = Shoulder Reserve Boundary."
+            )
 
     with tab_section:
         render_section_view(res)
@@ -1180,14 +1245,14 @@ They are **not ESD-bag allowances**.
 - Finger notch / finger access should normally be a **local feature**.
 - The solver therefore does not enlarge every cavity pitch simply because manual handling is selected.
 
-**V0.3 Product / Section visualization**
+**V0.3.1 Product / Section visualization**
+- Default Top View = **Simple**: Product + Pocket Top Opening only.
+- Engineering Top View optionally adds **Pocket Bottom / Fit Clearance** and **Shoulder Reserve** boundaries.
 - Green = **Pure Product Maximum Envelope**.
-- Blue dashed = **Bottom Pocket / Product Clearance Envelope**.
-- Grey pocket outline = **Draft-expanded Top Opening**.
 - Product is assumed to rest on the **Pocket Bottom** for RFQ section screening.
 - Therefore `Product Top below Tray Top = Pocket Depth - Product Height`.
-- `Auto — Critical Plane` selects the smaller bottom-pocket plane for the representative section.
-- `Show Both` displays Width-plane and Length-plane sections side-by-side.
+- Default Section View = **Show Both** so Width and Length planes can be reviewed together.
+- `Auto — Critical Plane` remains available when a single representative section is preferred.
 - The visual does **not** infer actual PCBA component height maps or local connector/keep-out geometry.
 
 **Draft**
